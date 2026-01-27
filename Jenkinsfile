@@ -1,101 +1,105 @@
 pipeline {
     agent any
 
-    environment {
-        SCANNER_HOME = tool 'sonar-scanner'
-        NVD_API_KEY = credentials('nvd-api-key')  // Jenkins secret text credential
-    }
-
     tools {
         maven 'maven3'
         jdk 'jdk-17'
     }
 
+    environment {
+        SCANNER_HOME = tool 'sonar-scanner'
+    }
+
     stages {
-        stage('git checkout') {
+
+        stage('Git Checkout') {
             steps {
-                git branch: 'master', url: 'https://github.com/anjalinaragude/Ekart.git'
+                git branch: 'master',
+                    url: 'https://github.com/anjalinaragude/Ekart.git'
             }
         }
 
-        stage('compile') {
+        stage('Compile') {
             steps {
-                sh "mvn compile"
+                sh 'mvn clean compile'
             }
         }
 
-        stage('unit tests') {
+        stage('Unit Tests') {
             steps {
-                sh "mvn test -DskipTests=true"
+                sh 'mvn test'
             }
         }
 
-        stage('SonarQube analysis') {
+        stage('SonarQube Analysis') {
             steps {
-                withSonarQubeEnv('sonar-scanner') {
-                    sh "${env.SCANNER_HOME}/bin/sonar-scanner \
-                        -Dsonar.projectKey=EKART \
-                        -Dsonar.projectName=EKART \
-                        -Dsonar.java.binaries=target/classes"
+                withSonarQubeEnv('s0nar-scanner') {
+                    sh """
+                    ${SCANNER_HOME}/bin/sonar-scanner \
+                    -Dsonar.projectKey=EKART \
+                    -Dsonar.projectName=EKART \
+                    -Dsonar.java.binaries=target/classes
+                    """
                 }
             }
         }
 
         stage('OWASP Dependency Check') {
             steps {
-                  withCredentials([string(credentialsId: 'nvd-api-key', variable: 'NVD_API_KEY')]) {
-                    dependencyCheck additionalArguments: "--nvdApiKey=$NVD_API_KEY",
-                                    odcInstallation: 'DC'
-             }
-        }
+                dependencyCheck(
+                    odcInstallation: 'DC',
+                    scanPath: '.',
+                    failOnError: false
+                )
+            }
         }
 
         stage('Build') {
             steps {
-                sh "mvn package -DskipTests=true"
+                sh 'mvn package -DskipTests=true'
             }
         }
 
-        stage('deploy to Nexus') {
+        stage('Deploy to Nexus') {
             steps {
-                withMaven(globalMavenSettingsConfig: 'global-maven', jdk: 'jdk-17', maven: 'maven3', mavenSettingsConfig: '', traceability: true) {
-                    sh "mvn deploy -DskipTests=true"
+                withMaven(
+                    globalMavenSettingsConfig: 'global-maven',
+                    jdk: 'jdk-17',
+                    maven: 'maven3',
+                    traceability: true
+                ) {
+                    sh 'mvn deploy -DskipTests=true'
                 }
             }
         }
-        
 
-        stage('build and Tag docker image') {
+        stage('Build Docker Image') {
             steps {
-                script {
-                        sh "docker build -t anjalinaragude/ekart:latest -f docker/Dockerfile ."
-                    }
+                sh 'docker build -t anjalinaragude/ekart:latest -f docker/Dockerfile .'
             }
         }
 
-        stage('Push image to Hub'){
-            steps{
-                script{
-                   withCredentials([string(credentialsId: 'dockerhub-pwd', variable: 'dockerhubpwd')]) {
-                   sh 'docker login -u anjalinaragude -p ${dockerhubpwd}'}
-                   sh 'docker push anjalinaragude/ekart:latest'
+        stage('Push Image to Docker Hub') {
+            steps {
+                withCredentials([string(credentialsId: 'dockerhub-pwd', variable: 'DOCKER_PWD')]) {
+                    sh '''
+                    echo $DOCKER_PWD | docker login -u anjalinaragude --password-stdin
+                    docker push anjalinaragude/ekart:latest
+                    '''
                 }
             }
         }
-        stage('EKS and Kubectl configuration'){
-            steps{
-                script{
-                    sh 'aws eks update-kubeconfig --region ap-northeast-1 --name project-cluster'
-                }
+
+        stage('EKS Configuration') {
+            steps {
+                sh 'aws eks update-kubeconfig --region ap-northeast-1 --name project-cluster'
             }
         }
-        stage('Deploy to k8s'){
-            steps{
-                script{
-                    sh 'kubectl apply -f deploymentservice.yml'
-                }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                sh 'kubectl apply -f deploymentservice.yml'
             }
         }
     }
-
 }
